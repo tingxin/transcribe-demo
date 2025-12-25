@@ -54,26 +54,49 @@ def test_single_audio():
         test_url = audio_urls.iloc[0]
         logger.info(f"测试URL: {test_url}")
         
-        # 1. 下载音频文件
+        # 1. 下载音频文件（使用缓存）
         logger.info("步骤1: 下载音频文件")
-        response = requests.get(test_url, stream=True, timeout=30)
-        response.raise_for_status()
+        
+        # 生成缓存文件名
+        import hashlib
+        url_hash = hashlib.md5(test_url.encode()).hexdigest()[:8]
+        cached_filename = f"test_audio_{url_hash}.mp3"
         
         # 保存到本地
         audio_dir = Path('test_audio')
         audio_dir.mkdir(exist_ok=True)
-        local_file = audio_dir / 'test_audio.mp3'
+        local_file = audio_dir / cached_filename
         
-        with open(local_file, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        # 检查缓存
+        if local_file.exists():
+            file_size = local_file.stat().st_size
+            if file_size > 0:
+                logger.info(f"使用缓存文件: {local_file} (大小: {file_size} 字节)")
+            else:
+                logger.warning(f"缓存文件为空，重新下载: {local_file}")
+                local_file.unlink()
+                
+        if not local_file.exists():
+            logger.info(f"下载新文件: {test_url}")
+            response = requests.get(test_url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            with open(local_file, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            file_size = local_file.stat().st_size
+            logger.info(f"音频文件已下载: {local_file} (大小: {file_size} 字节)")
         
-        logger.info(f"音频文件已下载: {local_file}")
+        # 验证文件
+        if not local_file.exists() or local_file.stat().st_size == 0:
+            logger.error("音频文件下载失败或为空")
+            return
         
         # 2. 上传到S3（使用文件夹前缀）
         logger.info("步骤2: 上传到S3")
         s3_client = boto3.client('s3', region_name=AWS_REGION)
-        s3_key = f"{S3_FOLDER_PREFIX}test-audio/test_audio_{int(time.time())}.mp3"
+        s3_key = f"{S3_FOLDER_PREFIX}test-audio/{cached_filename}"
         
         s3_client.upload_file(str(local_file), S3_BUCKET, s3_key)
         s3_uri = f"s3://{S3_BUCKET}/{s3_key}"

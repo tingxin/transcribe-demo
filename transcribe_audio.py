@@ -40,18 +40,60 @@ class AudioTranscriber:
         self.audio_dir.mkdir(exist_ok=True)
         self.transcripts_dir.mkdir(exist_ok=True)
     
-    def download_audio_file(self, url, filename):
+    def get_cached_filename(self, url):
         """
-        下载音频文件
+        根据URL生成缓存文件名
         
         Args:
             url: 音频文件URL
-            filename: 本地保存的文件名
+            
+        Returns:
+            str: 缓存文件名
+        """
+        import hashlib
+        from urllib.parse import urlparse
+        
+        # 使用URL的hash作为文件名的一部分，确保唯一性
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        
+        # 尝试从URL获取原始文件名和扩展名
+        parsed_url = urlparse(url)
+        original_filename = Path(parsed_url.path).name
+        
+        if original_filename and '.' in original_filename:
+            name, ext = original_filename.rsplit('.', 1)
+            return f"{name}_{url_hash}.{ext}"
+        else:
+            return f"audio_{url_hash}.mp3"
+    
+    def download_audio_file(self, url, filename=None):
+        """
+        下载音频文件，如果本地已存在则使用缓存
+        
+        Args:
+            url: 音频文件URL
+            filename: 本地保存的文件名，如果为None则自动生成
             
         Returns:
             str: 本地文件路径，如果下载失败返回None
         """
         try:
+            # 如果没有指定文件名，则根据URL生成缓存文件名
+            if filename is None:
+                filename = self.get_cached_filename(url)
+            
+            file_path = self.audio_dir / filename
+            
+            # 检查文件是否已存在
+            if file_path.exists():
+                file_size = file_path.stat().st_size
+                if file_size > 0:  # 确保文件不为空
+                    logger.info(f"使用缓存文件: {file_path} (大小: {file_size} 字节)")
+                    return str(file_path)
+                else:
+                    logger.warning(f"缓存文件为空，重新下载: {file_path}")
+                    file_path.unlink()  # 删除空文件
+            
             logger.info(f"正在下载: {url}")
             
             # 发送HTTP请求下载文件
@@ -59,12 +101,18 @@ class AudioTranscriber:
             response.raise_for_status()
             
             # 保存文件
-            file_path = self.audio_dir / filename
             with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             
-            logger.info(f"下载完成: {file_path}")
+            # 验证下载的文件大小
+            file_size = file_path.stat().st_size
+            if file_size == 0:
+                logger.error(f"下载的文件为空: {file_path}")
+                file_path.unlink()  # 删除空文件
+                return None
+            
+            logger.info(f"下载完成: {file_path} (大小: {file_size} 字节)")
             return str(file_path)
             
         except Exception as e:
@@ -235,7 +283,64 @@ class AudioTranscriber:
             logger.info(f"纯文本已保存: {text_file}")
             
         except Exception as e:
-            logger.error(f"保存转录结果失败: {str(e)}")
+    def clean_cache(self, max_age_days=7):
+        """
+        清理过期的缓存文件
+        
+        Args:
+            max_age_days: 缓存文件的最大保留天数
+        """
+        try:
+            import time
+            current_time = time.time()
+            max_age_seconds = max_age_days * 24 * 3600
+            
+            cleaned_count = 0
+            total_size = 0
+            
+            for file_path in self.audio_dir.glob('*'):
+                if file_path.is_file():
+                    file_age = current_time - file_path.stat().st_mtime
+                    file_size = file_path.stat().st_size
+                    
+                    if file_age > max_age_seconds:
+                        total_size += file_size
+                        file_path.unlink()
+                        cleaned_count += 1
+                        logger.info(f"删除过期缓存文件: {file_path}")
+            
+            if cleaned_count > 0:
+                logger.info(f"清理完成: 删除了 {cleaned_count} 个文件，释放空间 {total_size / 1024 / 1024:.2f} MB")
+            else:
+                logger.info("没有需要清理的过期缓存文件")
+                
+        except Exception as e:
+            logger.error(f"清理缓存失败: {str(e)}")
+    
+    def get_cache_info(self):
+        """
+        获取缓存信息
+        
+        Returns:
+            dict: 缓存统计信息
+        """
+        try:
+            file_count = 0
+            total_size = 0
+            
+            for file_path in self.audio_dir.glob('*'):
+                if file_path.is_file():
+                    file_count += 1
+                    total_size += file_path.stat().st_size
+            
+            return {
+                'file_count': file_count,
+                'total_size_mb': total_size / 1024 / 1024,
+                'cache_dir': str(self.audio_dir)
+            }
+        except Exception as e:
+            logger.error(f"获取缓存信息失败: {str(e)}")
+            return None
     def process_csv_file(self, csv_file, s3_bucket, s3_folder_prefix='', audio_column='通话录音', limit=None):
         """
         处理CSV文件中的音频URL
@@ -270,15 +375,13 @@ class AudioTranscriber:
                     audio_url = row[audio_column]
                     logger.info(f"处理第 {index + 1} 个文件: {audio_url}")
                     
-                    # 生成文件名
-                    parsed_url = urlparse(audio_url)
-                    file_extension = Path(parsed_url.path).suffix or '.mp3'
-                    filename = f"audio_{index}_{int(time.time())}{file_extension}"
-                    
-                    # 下载音频文件
-                    local_file_path = self.download_audio_file(audio_url, filename)
+                    # 下载音频文件（使用缓存）
+                    local_file_path = self.download_audio_file(audio_url)
                     if not local_file_path:
                         continue
+                    
+                    # 从本地文件路径获取文件名
+                    filename = Path(local_file_path).name
                     
                     # 上传到S3（使用指定的文件夹前缀）
                     s3_key = f"{s3_folder_prefix}audio/{filename}" if s3_folder_prefix else f"transcribe-audio/{filename}"
@@ -360,6 +463,14 @@ def main():
     
     # 创建转录器实例
     transcriber = AudioTranscriber(aws_region=AWS_REGION)
+    
+    # 显示缓存信息
+    cache_info = transcriber.get_cache_info()
+    if cache_info:
+        logger.info(f"缓存信息: {cache_info['file_count']} 个文件, {cache_info['total_size_mb']:.2f} MB")
+    
+    # 可选：清理过期缓存（超过7天的文件）
+    # transcriber.clean_cache(max_age_days=7)
     
     # 处理CSV文件
     transcriber.process_csv_file(
