@@ -56,30 +56,53 @@ def create_labeled_transcript(transcript_data):
     try:
         labeled_lines = []
         
+        # 调试：打印数据结构
+        logger.info("调试：检查转录数据结构")
+        if 'results' in transcript_data:
+            logger.info(f"results键存在，类型: {type(transcript_data['results'])}")
+            if isinstance(transcript_data['results'], dict):
+                logger.info(f"results内容键: {list(transcript_data['results'].keys())}")
+            elif isinstance(transcript_data['results'], list):
+                logger.info(f"results是列表，长度: {len(transcript_data['results'])}")
+                if len(transcript_data['results']) > 0:
+                    logger.info(f"第一个元素键: {list(transcript_data['results'][0].keys()) if isinstance(transcript_data['results'][0], dict) else 'not dict'}")
+        
+        # 处理results可能是列表的情况
+        results_data = transcript_data['results']
+        if isinstance(results_data, list) and len(results_data) > 0:
+            results_data = results_data[0]
+        
         # 优先使用说话人标签
-        if 'speaker_labels' in transcript_data['results']:
-            segments = transcript_data['results']['speaker_labels']['segments']
+        if 'speaker_labels' in results_data:
+            logger.info("找到speaker_labels")
+            speaker_labels = results_data['speaker_labels']
             
-            for segment in segments:
-                speaker_label = segment['speaker_label']
-                speaker_name = get_speaker_name(speaker_label)
+            if 'segments' in speaker_labels:
+                segments = speaker_labels['segments']
+                logger.info(f"找到 {len(segments)} 个说话人片段")
                 
-                # 获取这个时间段的文本
-                segment_text = ""
-                for item in segment['items']:
-                    if 'alternatives' in item and len(item['alternatives']) > 0:
-                        content = item['alternatives'][0]['content']
-                        if item.get('type') == 'punctuation':
-                            segment_text = segment_text.rstrip() + content + " "
-                        else:
-                            segment_text += content + " "
-                
-                if segment_text.strip():
-                    labeled_lines.append(f"{speaker_name}: {segment_text.strip()}")
+                for segment in segments:
+                    speaker_label = segment['speaker_label']
+                    speaker_name = get_speaker_name(speaker_label)
+                    
+                    # 获取这个时间段的文本
+                    segment_text = ""
+                    if 'items' in segment:
+                        for item in segment['items']:
+                            if 'alternatives' in item and len(item['alternatives']) > 0:
+                                content = item['alternatives'][0]['content']
+                                if item.get('type') == 'punctuation':
+                                    segment_text = segment_text.rstrip() + content + " "
+                                else:
+                                    segment_text += content + " "
+                    
+                    if segment_text.strip():
+                        labeled_lines.append(f"{speaker_name}: {segment_text.strip()}")
         
         # 如果没有说话人标签，使用声道标签
-        elif 'channel_labels' in transcript_data['results']:
-            channels = transcript_data['results']['channel_labels']['channels']
+        elif 'channel_labels' in results_data:
+            logger.info("找到channel_labels")
+            channels = results_data['channel_labels']['channels']
             
             # 按时间排序所有项目
             all_items = []
@@ -118,18 +141,35 @@ def create_labeled_transcript(transcript_data):
         
         # 如果都没有，返回原始文本
         else:
-            original_text = transcript_data['results']['transcripts'][0]['transcript']
-            labeled_lines.append(f"[未识别说话人]: {original_text}")
+            logger.info("未找到说话人或声道标签，使用原始文本")
+            if 'transcripts' in results_data and len(results_data['transcripts']) > 0:
+                original_text = results_data['transcripts'][0]['transcript']
+                labeled_lines.append(f"[未识别说话人]: {original_text}")
+            else:
+                labeled_lines.append("[无法获取转录文本]")
         
-        return "\n\n".join(labeled_lines)
+        result = "\n\n".join(labeled_lines)
+        logger.info(f"生成带标签转录，共 {len(labeled_lines)} 段")
+        return result
         
     except Exception as e:
         logger.error(f"创建带标签转录失败: {str(e)}")
+        logger.error(f"错误类型: {type(e)}")
+        import traceback
+        logger.error(f"错误详情: {traceback.format_exc()}")
+        
         # 返回原始文本作为备选
         try:
-            return f"[处理错误]: {transcript_data['results']['transcripts'][0]['transcript']}"
+            results_data = transcript_data['results']
+            if isinstance(results_data, list) and len(results_data) > 0:
+                results_data = results_data[0]
+            
+            if 'transcripts' in results_data and len(results_data['transcripts']) > 0:
+                return f"[处理错误]: {results_data['transcripts'][0]['transcript']}"
+            else:
+                return "[转录处理失败: 无法获取文本]"
         except:
-            return "[转录处理失败]"
+            return "[转录处理完全失败]"
 
 def test_single_audio():
     """测试单个音频文件的处理流程"""
@@ -256,18 +296,38 @@ def test_single_audio():
                 
                 # 创建带标签的转录文本
                 labeled_transcript = create_labeled_transcript(transcript_data)
-                transcript_text = transcript_data['results']['transcripts'][0]['transcript']
                 
                 # 提取说话人信息
                 speaker_segments = []
-                if 'speaker_labels' in transcript_data['results']:
-                    for segment in transcript_data['results']['speaker_labels']['segments']:
-                        speaker_segments.append({
-                            'speaker': segment['speaker_label'],
-                            'start_time': segment['start_time'],
-                            'end_time': segment['end_time'],
-                            'items': segment['items']
-                        })
+                try:
+                    # 处理results可能是列表的情况
+                    results_data = transcript_data['results']
+                    if isinstance(results_data, list) and len(results_data) > 0:
+                        results_data = results_data[0]
+                    
+                    if 'speaker_labels' in results_data and 'segments' in results_data['speaker_labels']:
+                        for segment in results_data['speaker_labels']['segments']:
+                            speaker_segments.append({
+                                'speaker': segment['speaker_label'],
+                                'start_time': segment['start_time'],
+                                'end_time': segment['end_time'],
+                                'items': segment.get('items', [])
+                            })
+                        logger.info(f"提取了 {len(speaker_segments)} 个说话人片段")
+                    else:
+                        logger.info("未找到说话人片段信息")
+                except Exception as e:
+                    logger.error(f"提取说话人信息失败: {str(e)}")
+                
+                # 获取原始转录文本
+                try:
+                    results_data = transcript_data['results']
+                    if isinstance(results_data, list) and len(results_data) > 0:
+                        results_data = results_data[0]
+                    transcript_text = results_data['transcripts'][0]['transcript']
+                except Exception as e:
+                    logger.error(f"获取原始转录文本失败: {str(e)}")
+                    transcript_text = "[无法获取原始转录文本]"
                 
                 # 保存完整JSON结果（包含带标签转录）
                 complete_result = {
