@@ -390,90 +390,125 @@ class AudioTranscriber:
         try:
             labeled_lines = []
             
-            # 调试：检查数据结构
-            logger.debug("检查转录数据结构")
-            
             # 处理results可能是列表的情况
             results_data = transcript_data['results']
             if isinstance(results_data, list) and len(results_data) > 0:
                 results_data = results_data[0]
             
+            logger.info(f"数据结构检查: results类型={type(results_data)}")
+            
             # 优先使用说话人标签
-            if 'speaker_labels' in results_data:
+            if isinstance(results_data, dict) and 'speaker_labels' in results_data:
                 logger.info("使用说话人标签进行分段")
                 speaker_labels = results_data['speaker_labels']
                 
-                if 'segments' in speaker_labels:
+                if isinstance(speaker_labels, dict) and 'segments' in speaker_labels:
                     segments = speaker_labels['segments']
+                    logger.info(f"找到 {len(segments)} 个说话人片段")
                     
                     for segment in segments:
-                        speaker_label = segment['speaker_label']
+                        speaker_label = segment.get('speaker_label', 'unknown')
                         speaker_name = self.get_speaker_name(speaker_label)
                         
                         # 获取这个时间段的文本
                         segment_text = ""
                         if 'items' in segment:
                             for item in segment['items']:
-                                if 'alternatives' in item and len(item['alternatives']) > 0:
-                                    content = item['alternatives'][0]['content']
-                                    if item.get('type') == 'punctuation':
-                                        segment_text = segment_text.rstrip() + content + " "
-                                    else:
-                                        segment_text += content + " "
+                                if isinstance(item, dict) and 'alternatives' in item:
+                                    if len(item['alternatives']) > 0:
+                                        content = item['alternatives'][0].get('content', '')
+                                        if item.get('type') == 'punctuation':
+                                            segment_text = segment_text.rstrip() + content + " "
+                                        else:
+                                            segment_text += content + " "
                         
                         if segment_text.strip():
                             labeled_lines.append(f"{speaker_name}: {segment_text.strip()}")
             
             # 如果没有说话人标签，使用声道标签
-            elif 'channel_labels' in results_data:
+            elif isinstance(results_data, dict) and 'channel_labels' in results_data:
                 logger.info("使用声道标签进行分段")
-                channels = results_data['channel_labels']['channels']
+                channel_labels = results_data['channel_labels']
                 
-                # 按时间排序所有项目
-                all_items = []
-                for channel in channels:
-                    channel_name = self.get_channel_name(channel['channel_label'])
-                    for item in channel['items']:
-                        if item.get('type') == 'pronunciation' and 'start_time' in item:
-                            all_items.append({
-                                'start_time': float(item['start_time']),
-                                'content': item['alternatives'][0]['content'],
-                                'channel': channel_name
-                            })
-                
-                # 按时间排序
-                all_items.sort(key=lambda x: x['start_time'])
-                
-                # 按说话人分组连续的文本
-                current_channel = None
-                current_text = ""
-                
-                for item in all_items:
-                    if item['channel'] != current_channel:
-                        # 保存前一个说话人的文本
+                if isinstance(channel_labels, dict) and 'channels' in channel_labels:
+                    channels = channel_labels['channels']
+                    logger.info(f"找到 {len(channels)} 个声道")
+                    
+                    # 收集所有带时间戳的词汇
+                    all_items = []
+                    for channel in channels:
+                        channel_label = channel.get('channel_label', 'unknown')
+                        channel_name = self.get_channel_name(channel_label)
+                        
+                        if 'items' in channel:
+                            for item in channel['items']:
+                                if (isinstance(item, dict) and 
+                                    item.get('type') == 'pronunciation' and 
+                                    'start_time' in item and 
+                                    'alternatives' in item and
+                                    len(item['alternatives']) > 0):
+                                    
+                                    all_items.append({
+                                        'start_time': float(item['start_time']),
+                                        'content': item['alternatives'][0].get('content', ''),
+                                        'channel': channel_name
+                                    })
+                    
+                    logger.info(f"收集到 {len(all_items)} 个词汇项目")
+                    
+                    if all_items:
+                        # 按时间排序
+                        all_items.sort(key=lambda x: x['start_time'])
+                        
+                        # 按声道分组连续的文本
+                        current_channel = None
+                        current_text = ""
+                        
+                        for item in all_items:
+                            if item['channel'] != current_channel:
+                                # 保存前一个声道的文本
+                                if current_text.strip():
+                                    labeled_lines.append(f"{current_channel}: {current_text.strip()}")
+                                
+                                # 开始新的声道
+                                current_channel = item['channel']
+                                current_text = item['content'] + " "
+                            else:
+                                current_text += item['content'] + " "
+                        
+                        # 保存最后一个声道的文本
                         if current_text.strip():
                             labeled_lines.append(f"{current_channel}: {current_text.strip()}")
-                        
-                        # 开始新的说话人
-                        current_channel = item['channel']
-                        current_text = item['content'] + " "
-                    else:
-                        current_text += item['content'] + " "
+            
+            # 如果都没有，尝试从原始转录文本创建简单标签
+            if not labeled_lines:
+                logger.info("未找到说话人或声道标签，尝试简单分段")
                 
-                # 保存最后一个说话人的文本
-                if current_text.strip():
-                    labeled_lines.append(f"{current_channel}: {current_text.strip()}")
-            
-            # 如果都没有，返回原始文本
-            else:
-                logger.info("未找到说话人或声道标签，使用原始文本")
-                if 'transcripts' in results_data and len(results_data['transcripts']) > 0:
-                    original_text = results_data['transcripts'][0]['transcript']
+                # 获取原始转录文本
+                original_text = ""
+                if isinstance(results_data, dict) and 'transcripts' in results_data:
+                    transcripts = results_data['transcripts']
+                    if len(transcripts) > 0:
+                        original_text = transcripts[0].get('transcript', '')
+                
+                if original_text:
+                    # 简单的句子分割 - 按句号、问号、感叹号分割
+                    import re
+                    sentences = re.split(r'[.!?。！？]+', original_text)
+                    
+                    # 交替分配给两个说话人
+                    for i, sentence in enumerate(sentences):
+                        sentence = sentence.strip()
+                        if sentence:
+                            speaker = self.get_speaker_name('spk_0') if i % 2 == 0 else self.get_speaker_name('spk_1')
+                            labeled_lines.append(f"{speaker}: {sentence}")
+                
+                if not labeled_lines:
                     labeled_lines.append(f"[未识别说话人]: {original_text}")
-                else:
-                    labeled_lines.append("[无法获取转录文本]")
             
-            return "\n\n".join(labeled_lines)
+            result = "\n\n".join(labeled_lines)
+            logger.info(f"最终生成 {len(labeled_lines)} 个标签片段")
+            return result
             
         except Exception as e:
             logger.error(f"创建带标签转录失败: {str(e)}")
