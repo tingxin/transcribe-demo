@@ -232,13 +232,14 @@ class AudioTranscriber:
             
         except Exception as e:
             logger.error(f"保存转录结果失败: {str(e)}")
-    def process_csv_file(self, csv_file, s3_bucket, audio_column='通话录音', limit=None):
+    def process_csv_file(self, csv_file, s3_bucket, s3_folder_prefix='', audio_column='通话录音', limit=None):
         """
         处理CSV文件中的音频URL
         
         Args:
             csv_file: CSV文件路径
             s3_bucket: S3存储桶名称
+            s3_folder_prefix: S3文件夹前缀，例如 'my-project/audio-transcripts/'
             audio_column: 音频URL列名，默认为'通话录音'
             limit: 处理的最大行数，None表示处理所有行
         """
@@ -275,8 +276,8 @@ class AudioTranscriber:
                     if not local_file_path:
                         continue
                     
-                    # 上传到S3
-                    s3_key = f"transcribe-audio/{filename}"
+                    # 上传到S3（使用指定的文件夹前缀）
+                    s3_key = f"{s3_folder_prefix}audio/{filename}" if s3_folder_prefix else f"transcribe-audio/{filename}"
                     s3_uri = self.upload_to_s3(local_file_path, s3_bucket, s3_key)
                     if not s3_uri:
                         continue
@@ -322,7 +323,8 @@ def main():
     """
     # 配置参数
     CSV_FILE = 'call.csv'  # CSV文件路径
-    S3_BUCKET = 'your-transcribe-bucket'  # 替换为你的S3存储桶名称
+    S3_BUCKET = 'your-existing-bucket'  # 替换为你现有的S3存储桶名称
+    S3_FOLDER_PREFIX = 'audio-transcripts/'  # 在现有桶中使用的文件夹前缀
     AWS_REGION = 'us-east-1'  # AWS区域
     LIMIT = 5  # 限制处理的文件数量，用于测试。设置为None处理所有文件
     
@@ -347,6 +349,7 @@ def main():
     transcriber.process_csv_file(
         csv_file=CSV_FILE,
         s3_bucket=S3_BUCKET,
+        s3_folder_prefix=S3_FOLDER_PREFIX,
         limit=LIMIT
     )
 

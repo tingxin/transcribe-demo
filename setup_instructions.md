@@ -33,14 +33,22 @@ export AWS_DEFAULT_REGION=us-east-1
 ### 方法3: 使用IAM角色 (如果在EC2上运行)
 无需额外配置，脚本会自动使用实例的IAM角色。
 
-## 3. 创建S3存储桶
+## 3. 使用现有S3存储桶
+
+如果你没有创建新桶的权限，可以使用现有的S3桶中的文件夹：
 
 ```bash
-# 使用AWS CLI创建存储桶
-aws s3 mb s3://your-transcribe-bucket --region us-east-1
+# 检查现有桶的访问权限
+aws s3 ls s3://your-existing-bucket/
+
+# 可选：创建专用文件夹（如果有权限）
+aws s3api put-object --bucket your-existing-bucket --key audio-transcripts/
 ```
 
-或者在AWS控制台中手动创建。
+**注意**: 确保你对现有桶有以下权限：
+- `s3:PutObject` - 上传文件
+- `s3:GetObject` - 读取文件  
+- `s3:ListBucket` - 列出桶内容
 
 ## 4. 配置脚本参数
 
@@ -49,10 +57,17 @@ aws s3 mb s3://your-transcribe-bucket --region us-east-1
 ```python
 # 在main()函数中修改这些参数
 CSV_FILE = 'call.csv'  # CSV文件路径
-S3_BUCKET = 'your-transcribe-bucket'  # 替换为你的S3存储桶名称
+S3_BUCKET = 'your-existing-bucket'  # 替换为你现有的S3存储桶名称
+S3_FOLDER_PREFIX = 'audio-transcripts/'  # 在现有桶中使用的文件夹前缀
 AWS_REGION = 'us-east-1'  # AWS区域
 LIMIT = 5  # 限制处理的文件数量，用于测试。设置为None处理所有文件
 ```
+
+**文件夹结构示例**:
+- 如果 `S3_FOLDER_PREFIX = 'my-project/audio/'`
+- 音频文件将上传到: `s3://your-bucket/my-project/audio/audio/filename.mp3`
+- 如果 `S3_FOLDER_PREFIX = ''` (空字符串)
+- 音频文件将上传到: `s3://your-bucket/transcribe-audio/filename.mp3`
 
 ## 5. 运行脚本
 
@@ -93,14 +108,14 @@ python3 transcribe_audio.py
                 "s3:GetObject",
                 "s3:DeleteObject"
             ],
-            "Resource": "arn:aws:s3:::your-transcribe-bucket/*"
+            "Resource": "arn:aws:s3:::your-existing-bucket/audio-transcripts/*"
         },
         {
             "Effect": "Allow",
             "Action": [
                 "s3:ListBucket"
             ],
-            "Resource": "arn:aws:s3:::your-transcribe-bucket"
+            "Resource": "arn:aws:s3:::your-existing-bucket"
         }
     ]
 }

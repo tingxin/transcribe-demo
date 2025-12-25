@@ -21,7 +21,8 @@ def test_single_audio():
     """测试单个音频文件的处理流程"""
     
     # 配置参数 - 请修改这些参数
-    S3_BUCKET = 'your-transcribe-bucket'  # 替换为你的S3存储桶
+    S3_BUCKET = 'your-existing-bucket'  # 替换为你现有的S3存储桶
+    S3_FOLDER_PREFIX = 'audio-transcripts/'  # 在现有桶中使用的文件夹前缀
     AWS_REGION = 'us-east-1'
     
     try:
@@ -53,10 +54,10 @@ def test_single_audio():
         
         logger.info(f"音频文件已下载: {local_file}")
         
-        # 2. 上传到S3
+        # 2. 上传到S3（使用文件夹前缀）
         logger.info("步骤2: 上传到S3")
         s3_client = boto3.client('s3', region_name=AWS_REGION)
-        s3_key = f"test-transcribe/test_audio_{int(time.time())}.mp3"
+        s3_key = f"{S3_FOLDER_PREFIX}test-audio/test_audio_{int(time.time())}.mp3"
         
         s3_client.upload_file(str(local_file), S3_BUCKET, s3_key)
         s3_uri = f"s3://{S3_BUCKET}/{s3_key}"
