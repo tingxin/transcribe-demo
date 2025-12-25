@@ -263,10 +263,24 @@ class AudioTranscriber:
                         'items': segment['items']
                     })
             
+            # 提取声道信息（如果有）
+            channel_segments = []
+            if 'channel_labels' in transcript_data['results']:
+                for channel in transcript_data['results']['channel_labels']['channels']:
+                    channel_segments.append({
+                        'channel': channel['channel_label'],
+                        'items': channel['items']
+                    })
+            
+            # 创建带标签的转录文本
+            labeled_transcript = self.create_labeled_transcript(transcript_data)
+            
             # 保存结果
             result = {
                 'transcript': transcript_text,
+                'labeled_transcript': labeled_transcript,
                 'speaker_segments': speaker_segments,
+                'channel_segments': channel_segments,
                 'full_result': transcript_data
             }
             
@@ -275,14 +289,178 @@ class AudioTranscriber:
             
             logger.info(f"转录结果已保存: {output_file}")
             
-            # 同时保存纯文本版本
+            # 同时保存格式化的文本版本
             text_file = output_file.with_suffix('.txt')
             with open(text_file, 'w', encoding='utf-8') as f:
-                f.write(transcript_text)
+                f.write("=== 带标签的转录文本（推荐用于分析） ===\n")
+                f.write(labeled_transcript + "\n\n")
+                
+                f.write("=== 原始完整转录文本 ===\n")
+                f.write(transcript_text + "\n\n")
+                
+                # 添加说话人分段信息（带时间戳）
+                if speaker_segments:
+                    f.write("=== 按说话人分段（详细时间） ===\n")
+                    for segment in speaker_segments:
+                        start_time = float(segment['start_time'])
+                        end_time = float(segment['end_time'])
+                        
+                        # 格式化时间
+                        start_min = int(start_time // 60)
+                        start_sec = start_time % 60
+                        end_min = int(end_time // 60)
+                        end_sec = end_time % 60
+                        
+                        time_str = f"[{start_min:02d}:{start_sec:05.2f} - {end_min:02d}:{end_sec:05.2f}]"
+                        
+                        # 获取这个时间段的文本
+                        segment_text = ""
+                        for item in segment['items']:
+                            if 'alternatives' in item and len(item['alternatives']) > 0:
+                                segment_text += item['alternatives'][0]['content'] + " "
+                        
+                        # 使用友好的说话人名称
+                        speaker_name = self.get_speaker_name(segment['speaker'])
+                        f.write(f"{speaker_name} {time_str}: {segment_text.strip()}\n")
             
-            logger.info(f"纯文本已保存: {text_file}")
+            logger.info(f"格式化文本已保存: {text_file}")
             
         except Exception as e:
+            logger.error(f"保存转录结果失败: {str(e)}")
+    
+    def get_speaker_name(self, speaker_label):
+        """
+        将说话人标签转换为更友好的名称
+        
+        Args:
+            speaker_label: AWS返回的说话人标签 (如 spk_0, spk_1)
+            
+        Returns:
+            str: 友好的说话人名称
+        """
+        # 从环境变量读取自定义标签
+        speaker_0_label = os.getenv('SPEAKER_0_LABEL', '客服')
+        speaker_1_label = os.getenv('SPEAKER_1_LABEL', '客户')
+        
+        speaker_mapping = {
+            'spk_0': f'[{speaker_0_label}]',
+            'spk_1': f'[{speaker_1_label}]', 
+            'spk_2': '[说话人3]',
+            'spk_3': '[说话人4]',
+            'spk_4': '[说话人5]',
+            'spk_5': '[说话人6]',
+            'spk_6': '[说话人7]',
+            'spk_7': '[说话人8]',
+            'spk_8': '[说话人9]',
+            'spk_9': '[说话人10]'
+        }
+        return speaker_mapping.get(speaker_label, f'[{speaker_label}]')
+    
+    def get_channel_name(self, channel_label):
+        """
+        将声道标签转换为更友好的名称
+        
+        Args:
+            channel_label: AWS返回的声道标签 (如 ch_0, ch_1)
+            
+        Returns:
+            str: 友好的声道名称
+        """
+        channel_mapping = {
+            'ch_0': '[声道1-客服]',
+            'ch_1': '[声道2-客户]',
+            'ch_2': '[声道3]',
+            'ch_3': '[声道4]'
+        }
+        return channel_mapping.get(channel_label, f'[{channel_label}]')
+    
+    def create_labeled_transcript(self, transcript_data):
+        """
+        创建带标签的转录文本，清晰标记每段话的说话人
+        
+        Args:
+            transcript_data: AWS Transcribe返回的完整数据
+            
+        Returns:
+            str: 带标签的转录文本
+        """
+        try:
+            labeled_lines = []
+            
+            # 优先使用说话人标签
+            if 'speaker_labels' in transcript_data['results']:
+                segments = transcript_data['results']['speaker_labels']['segments']
+                
+                for segment in segments:
+                    speaker_label = segment['speaker_label']
+                    speaker_name = self.get_speaker_name(speaker_label)
+                    
+                    # 获取这个时间段的文本
+                    segment_text = ""
+                    for item in segment['items']:
+                        if 'alternatives' in item and len(item['alternatives']) > 0:
+                            content = item['alternatives'][0]['content']
+                            if item.get('type') == 'punctuation':
+                                segment_text = segment_text.rstrip() + content + " "
+                            else:
+                                segment_text += content + " "
+                    
+                    if segment_text.strip():
+                        labeled_lines.append(f"{speaker_name}: {segment_text.strip()}")
+            
+            # 如果没有说话人标签，使用声道标签
+            elif 'channel_labels' in transcript_data['results']:
+                channels = transcript_data['results']['channel_labels']['channels']
+                
+                # 按时间排序所有项目
+                all_items = []
+                for channel in channels:
+                    channel_name = self.get_channel_name(channel['channel_label'])
+                    for item in channel['items']:
+                        if item.get('type') == 'pronunciation' and 'start_time' in item:
+                            all_items.append({
+                                'start_time': float(item['start_time']),
+                                'content': item['alternatives'][0]['content'],
+                                'channel': channel_name
+                            })
+                
+                # 按时间排序
+                all_items.sort(key=lambda x: x['start_time'])
+                
+                # 按说话人分组连续的文本
+                current_channel = None
+                current_text = ""
+                
+                for item in all_items:
+                    if item['channel'] != current_channel:
+                        # 保存前一个说话人的文本
+                        if current_text.strip():
+                            labeled_lines.append(f"{current_channel}: {current_text.strip()}")
+                        
+                        # 开始新的说话人
+                        current_channel = item['channel']
+                        current_text = item['content'] + " "
+                    else:
+                        current_text += item['content'] + " "
+                
+                # 保存最后一个说话人的文本
+                if current_text.strip():
+                    labeled_lines.append(f"{current_channel}: {current_text.strip()}")
+            
+            # 如果都没有，返回原始文本
+            else:
+                original_text = transcript_data['results']['transcripts'][0]['transcript']
+                labeled_lines.append(f"[未识别说话人]: {original_text}")
+            
+            return "\n\n".join(labeled_lines)
+            
+        except Exception as e:
+            logger.error(f"创建带标签转录失败: {str(e)}")
+            # 返回原始文本作为备选
+            try:
+                return f"[处理错误]: {transcript_data['results']['transcripts'][0]['transcript']}"
+            except:
+                return "[转录处理失败]"
     def clean_cache(self, max_age_days=7):
         """
         清理过期的缓存文件

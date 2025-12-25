@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-简化版音频转录测试脚本
+简化版音频转录测试脚本（带标签功能）
 用于测试单个音频文件的下载和转录
 """
 
@@ -20,6 +20,116 @@ load_dotenv()
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+def get_speaker_name(speaker_label):
+    """
+    将说话人标签转换为更友好的名称
+    """
+    speaker_0_label = os.getenv('SPEAKER_0_LABEL', '客服')
+    speaker_1_label = os.getenv('SPEAKER_1_LABEL', '客户')
+    
+    speaker_mapping = {
+        'spk_0': f'[{speaker_0_label}]',
+        'spk_1': f'[{speaker_1_label}]', 
+        'spk_2': '[说话人3]',
+        'spk_3': '[说话人4]',
+        'spk_4': '[说话人5]'
+    }
+    return speaker_mapping.get(speaker_label, f'[{speaker_label}]')
+
+def get_channel_name(channel_label):
+    """
+    将声道标签转换为更友好的名称
+    """
+    channel_mapping = {
+        'ch_0': '[声道1-客服]',
+        'ch_1': '[声道2-客户]',
+        'ch_2': '[声道3]',
+        'ch_3': '[声道4]'
+    }
+    return channel_mapping.get(channel_label, f'[{channel_label}]')
+
+def create_labeled_transcript(transcript_data):
+    """
+    创建带标签的转录文本，清晰标记每段话的说话人
+    """
+    try:
+        labeled_lines = []
+        
+        # 优先使用说话人标签
+        if 'speaker_labels' in transcript_data['results']:
+            segments = transcript_data['results']['speaker_labels']['segments']
+            
+            for segment in segments:
+                speaker_label = segment['speaker_label']
+                speaker_name = get_speaker_name(speaker_label)
+                
+                # 获取这个时间段的文本
+                segment_text = ""
+                for item in segment['items']:
+                    if 'alternatives' in item and len(item['alternatives']) > 0:
+                        content = item['alternatives'][0]['content']
+                        if item.get('type') == 'punctuation':
+                            segment_text = segment_text.rstrip() + content + " "
+                        else:
+                            segment_text += content + " "
+                
+                if segment_text.strip():
+                    labeled_lines.append(f"{speaker_name}: {segment_text.strip()}")
+        
+        # 如果没有说话人标签，使用声道标签
+        elif 'channel_labels' in transcript_data['results']:
+            channels = transcript_data['results']['channel_labels']['channels']
+            
+            # 按时间排序所有项目
+            all_items = []
+            for channel in channels:
+                channel_name = get_channel_name(channel['channel_label'])
+                for item in channel['items']:
+                    if item.get('type') == 'pronunciation' and 'start_time' in item:
+                        all_items.append({
+                            'start_time': float(item['start_time']),
+                            'content': item['alternatives'][0]['content'],
+                            'channel': channel_name
+                        })
+            
+            # 按时间排序
+            all_items.sort(key=lambda x: x['start_time'])
+            
+            # 按说话人分组连续的文本
+            current_channel = None
+            current_text = ""
+            
+            for item in all_items:
+                if item['channel'] != current_channel:
+                    # 保存前一个说话人的文本
+                    if current_text.strip():
+                        labeled_lines.append(f"{current_channel}: {current_text.strip()}")
+                    
+                    # 开始新的说话人
+                    current_channel = item['channel']
+                    current_text = item['content'] + " "
+                else:
+                    current_text += item['content'] + " "
+            
+            # 保存最后一个说话人的文本
+            if current_text.strip():
+                labeled_lines.append(f"{current_channel}: {current_text.strip()}")
+        
+        # 如果都没有，返回原始文本
+        else:
+            original_text = transcript_data['results']['transcripts'][0]['transcript']
+            labeled_lines.append(f"[未识别说话人]: {original_text}")
+        
+        return "\n\n".join(labeled_lines)
+        
+    except Exception as e:
+        logger.error(f"创建带标签转录失败: {str(e)}")
+        # 返回原始文本作为备选
+        try:
+            return f"[处理错误]: {transcript_data['results']['transcripts'][0]['transcript']}"
+        except:
+            return "[转录处理失败]"
 
 def test_single_audio():
     """测试单个音频文件的处理流程"""
@@ -144,18 +254,73 @@ def test_single_audio():
                 result_dir = Path('test_results')
                 result_dir.mkdir(exist_ok=True)
                 
-                # 保存完整JSON结果
-                with open(result_dir / 'test_transcript.json', 'w', encoding='utf-8') as f:
-                    json.dump(transcript_data, f, ensure_ascii=False, indent=2)
-                
-                # 保存纯文本结果
+                # 创建带标签的转录文本
+                labeled_transcript = create_labeled_transcript(transcript_data)
                 transcript_text = transcript_data['results']['transcripts'][0]['transcript']
+                
+                # 提取说话人信息
+                speaker_segments = []
+                if 'speaker_labels' in transcript_data['results']:
+                    for segment in transcript_data['results']['speaker_labels']['segments']:
+                        speaker_segments.append({
+                            'speaker': segment['speaker_label'],
+                            'start_time': segment['start_time'],
+                            'end_time': segment['end_time'],
+                            'items': segment['items']
+                        })
+                
+                # 保存完整JSON结果（包含带标签转录）
+                complete_result = {
+                    'transcript': transcript_text,
+                    'labeled_transcript': labeled_transcript,
+                    'speaker_segments': speaker_segments,
+                    'full_result': transcript_data
+                }
+                
+                with open(result_dir / 'test_transcript.json', 'w', encoding='utf-8') as f:
+                    json.dump(complete_result, f, ensure_ascii=False, indent=2)
+                
+                # 保存格式化的文本结果
                 with open(result_dir / 'test_transcript.txt', 'w', encoding='utf-8') as f:
-                    f.write(transcript_text)
+                    f.write("=== 带标签的转录文本（推荐用于分析） ===\n")
+                    f.write(labeled_transcript + "\n\n")
+                    
+                    f.write("=== 原始完整转录文本 ===\n")
+                    f.write(transcript_text + "\n\n")
+                    
+                    # 添加说话人分段信息（带时间戳）
+                    if speaker_segments:
+                        f.write("=== 按说话人分段（详细时间） ===\n")
+                        for segment in speaker_segments:
+                            start_time = float(segment['start_time'])
+                            end_time = float(segment['end_time'])
+                            
+                            # 格式化时间
+                            start_min = int(start_time // 60)
+                            start_sec = start_time % 60
+                            end_min = int(end_time // 60)
+                            end_sec = end_time % 60
+                            
+                            time_str = f"[{start_min:02d}:{start_sec:05.2f} - {end_min:02d}:{end_sec:05.2f}]"
+                            
+                            # 获取这个时间段的文本
+                            segment_text = ""
+                            for item in segment['items']:
+                                if 'alternatives' in item and len(item['alternatives']) > 0:
+                                    segment_text += item['alternatives'][0]['content'] + " "
+                            
+                            # 使用友好的说话人名称
+                            speaker_name = get_speaker_name(segment['speaker'])
+                            f.write(f"{speaker_name} {time_str}: {segment_text.strip()}\n")
                 
                 logger.info("转录完成！")
-                logger.info(f"转录文本: {transcript_text}")
+                logger.info("=== 带标签的转录预览 ===")
+                # 显示前200个字符的带标签转录
+                preview = labeled_transcript[:200] + "..." if len(labeled_transcript) > 200 else labeled_transcript
+                logger.info(f"{preview}")
                 logger.info(f"完整结果保存在: {result_dir}")
+                logger.info(f"  - test_transcript.json: 完整JSON数据")
+                logger.info(f"  - test_transcript.txt: 格式化文本（包含标签）")
                 
                 break
                 

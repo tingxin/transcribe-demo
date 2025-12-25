@@ -1,0 +1,27 @@
+=== 带标签的转录文本（推荐用于分析） ===
+
+[客服]: Hola buenos días señor Jonathan gracias por tomar la llamada me presento soy asesora de la financiera Hola Fina este es un recordatorio de pago por cuatrocientos diez pesos para el día de hoy cómo lo estaría haciendo señor en transferencia o en efectivo
+
+[客户]: De hecho yo les escribí ahí en la aplicación porque para hacer transferencias necesito mi banco me pide una referencia de banco
+
+[客服]: Claro una clave yo le voy a mandar la clave interbancaria por WhatsApp y por mensaje para que usted tenga los datos si se le complica hacerlo por transferencia lo puede hacer a través de un pago en efectivo con el código de barras ya sea en un Seven Eleven
+
+[客户]: Okey en farmacias del ahorro puede ser también verdad
+
+[客服]: Sí lo puede hacer en farmacias del ahorro yo le voy a mandar un código de barras abajo del código de barras viene los establecimientos donde usted lo puede realizar
+
+=== 原始完整转录文本 ===
+
+Hola buenos días señor Jonathan gracias por tomar la llamada me presento soy asesora de la financiera Hola Fina este es un recordatorio de pago por cuatrocientos diez pesos para el día de hoy cómo lo estaría haciendo señor en transferencia o en efectivo De hecho yo les escribí ahí en la aplicación porque para hacer transferencias necesito mi banco me pide una referencia de banco Claro una clave yo le voy a mandar la clave interbancaria por WhatsApp y por mensaje para que usted tenga los datos...
+
+=== 按说话人分段（详细时间） ===
+
+[客服] [00:00.00 - 00:15.23]: Hola buenos días señor Jonathan gracias por tomar la llamada me presento soy asesora de la financiera Hola Fina este es un recordatorio de pago por cuatrocientos diez pesos para el día de hoy cómo lo estaría haciendo señor en transferencia o en efectivo
+
+[客户] [00:15.50 - 00:22.10]: De hecho yo les escribí ahí en la aplicación porque para hacer transferencias necesito mi banco me pide una referencia de banco
+
+[客服] [00:22.30 - 00:35.80]: Claro una clave yo le voy a mandar la clave interbancaria por WhatsApp y por mensaje para que usted tenga los datos si se le complica hacerlo por transferencia lo puede hacer a través de un pago en efectivo con el código de barras ya sea en un Seven Eleven
+
+[客户] [00:36.00 - 00:38.50]: Okey en farmacias del ahorro puede ser también verdad
+
+[客服] [00:38.70 - 00:45.20]: Sí lo puede hacer en farmacias del ahorro yo le voy a mandar un código de barras abajo del código de barras viene los establecimientos donde usted lo puede realizar
