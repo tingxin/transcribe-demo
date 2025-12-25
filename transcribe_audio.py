@@ -13,6 +13,10 @@ import json
 from urllib.parse import urlparse
 from pathlib import Path
 import logging
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -321,12 +325,24 @@ def main():
     """
     主函数
     """
-    # 配置参数
-    CSV_FILE = 'call.csv'  # CSV文件路径
-    S3_BUCKET = 'your-existing-bucket'  # 替换为你现有的S3存储桶名称
-    S3_FOLDER_PREFIX = 'audio-transcripts/'  # 在现有桶中使用的文件夹前缀
-    AWS_REGION = 'us-east-1'  # AWS区域
-    LIMIT = 5  # 限制处理的文件数量，用于测试。设置为None处理所有文件
+    # 从环境变量读取配置参数
+    CSV_FILE = os.getenv('CSV_FILE', 'call.csv')
+    S3_BUCKET = os.getenv('S3_BUCKET')
+    S3_FOLDER_PREFIX = os.getenv('S3_FOLDER_PREFIX', '')
+    AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
+    LIMIT = int(os.getenv('LIMIT', '5')) if os.getenv('LIMIT') else None
+    
+    # 验证必需的配置
+    if not S3_BUCKET:
+        logger.error("S3_BUCKET 环境变量未设置，请检查.env文件")
+        return
+    
+    logger.info(f"配置信息:")
+    logger.info(f"  CSV文件: {CSV_FILE}")
+    logger.info(f"  S3桶: {S3_BUCKET}")
+    logger.info(f"  S3文件夹前缀: {S3_FOLDER_PREFIX}")
+    logger.info(f"  AWS区域: {AWS_REGION}")
+    logger.info(f"  处理限制: {LIMIT if LIMIT else '无限制'}")
     
     # 检查AWS凭证
     try:

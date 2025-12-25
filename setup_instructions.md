@@ -50,24 +50,33 @@ aws s3api put-object --bucket your-existing-bucket --key audio-transcripts/
 - `s3:GetObject` - 读取文件  
 - `s3:ListBucket` - 列出桶内容
 
-## 4. 配置脚本参数
+## 4. 配置环境变量
 
-编辑 `transcribe_audio.py` 文件中的配置参数：
+复制环境变量模板文件并编辑：
 
-```python
-# 在main()函数中修改这些参数
-CSV_FILE = 'call.csv'  # CSV文件路径
-S3_BUCKET = 'your-existing-bucket'  # 替换为你现有的S3存储桶名称
-S3_FOLDER_PREFIX = 'audio-transcripts/'  # 在现有桶中使用的文件夹前缀
-AWS_REGION = 'us-east-1'  # AWS区域
-LIMIT = 5  # 限制处理的文件数量，用于测试。设置为None处理所有文件
+```bash
+cp .env.example .env
 ```
 
-**文件夹结构示例**:
-- 如果 `S3_FOLDER_PREFIX = 'my-project/audio/'`
-- 音频文件将上传到: `s3://your-bucket/my-project/audio/audio/filename.mp3`
-- 如果 `S3_FOLDER_PREFIX = ''` (空字符串)
-- 音频文件将上传到: `s3://your-bucket/transcribe-audio/filename.mp3`
+然后编辑 `.env` 文件，设置你的配置：
+
+```bash
+# AWS S3 配置
+S3_BUCKET=your-existing-bucket-name
+S3_FOLDER_PREFIX=audio-transcripts/
+AWS_REGION=us-east-1
+
+# 处理配置
+CSV_FILE=call.csv
+LIMIT=5
+```
+
+**参数说明**:
+- `S3_BUCKET`: 你现有的S3存储桶名称
+- `S3_FOLDER_PREFIX`: 在桶中使用的文件夹前缀（可以为空）
+- `AWS_REGION`: AWS区域
+- `CSV_FILE`: CSV文件路径
+- `LIMIT`: 处理的文件数量限制（设置为空表示处理所有文件）
 
 ## 5. 运行脚本
 
