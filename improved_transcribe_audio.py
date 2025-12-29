@@ -627,7 +627,7 @@ class ImprovedAudioTranscriber:
         }
         return channel_mapping.get(channel_label, f'[{channel_label}]')
     
-    def process_csv_file(self, csv_file, s3_bucket, s3_folder_prefix='', audio_column='通话录音', limit=None):
+    def process_csv_file(self, csv_file, s3_bucket, s3_folder_prefix='', audio_column='通话录音', limit=None, start_from=0):
         """
         处理CSV文件中的音频URL
         
@@ -637,6 +637,7 @@ class ImprovedAudioTranscriber:
             s3_folder_prefix: S3文件夹前缀，例如 'my-project/audio-transcripts/'
             audio_column: 音频URL列名，默认为'通话录音'
             limit: 处理的最大行数，None表示处理所有行
+            start_from: 从第几条记录开始处理，用于断点续传
         """
         try:
             # 读取CSV文件
@@ -649,18 +650,31 @@ class ImprovedAudioTranscriber:
             
             # 过滤有效的URL
             valid_urls = df[df[audio_column].notna() & (df[audio_column] != '')]
+            total_records = len(valid_urls)
+            
+            logger.info(f"找到 {total_records} 个有效的音频URL")
+            
+            # 支持断点续传：从指定位置开始处理
+            if start_from > 0:
+                valid_urls = valid_urls.iloc[start_from:]
+                logger.info(f"从第 {start_from + 1} 条记录开始处理")
             
             if limit:
                 valid_urls = valid_urls.head(limit)
+                logger.info(f"限制处理数量为 {limit} 条")
             
-            logger.info(f"找到 {len(valid_urls)} 个有效的音频URL")
+            logger.info(f"实际处理 {len(valid_urls)} 条记录")
             
             # 处理每个音频文件
             success_count = 0
+            error_count = 0
+            skip_count = 0
+            
             for idx, (original_index, row) in enumerate(valid_urls.iterrows()):
                 try:
                     audio_url = row[audio_column]
-                    logger.info(f"处理第 {idx + 1} 个文件 (CSV行号: {original_index}): {audio_url}")
+                    current_position = start_from + idx + 1
+                    logger.info(f"处理第 {current_position} 个文件 (CSV行号: {original_index}): {audio_url}")
                     
                     # 生成输出文件名和映射信息
                     json_filename, txt_filename, mapping_info = self.generate_output_filename(row, original_index)
@@ -671,12 +685,14 @@ class ImprovedAudioTranscriber:
                     
                     if json_output_file.exists() and txt_output_file.exists():
                         logger.info(f"文件已存在，跳过处理: {json_filename}")
+                        skip_count += 1
                         continue
                     
                     # 下载音频文件（使用缓存）
                     local_file_path = self.download_audio_file(audio_url)
                     if not local_file_path:
                         logger.warning(f"跳过CSV行号 {original_index}：下载失败")
+                        error_count += 1
                         continue
                     
                     # 从本地文件路径获取文件名
@@ -687,18 +703,21 @@ class ImprovedAudioTranscriber:
                     s3_uri = self.upload_to_s3(local_file_path, s3_bucket, s3_key)
                     if not s3_uri:
                         logger.warning(f"跳过CSV行号 {original_index}：S3上传失败")
+                        error_count += 1
                         continue
                     
                     # 启动转录任务（使用原始行号）
                     job_name = f"transcribe-job-{original_index}-{int(time.time())}"
                     if not self.start_transcription_job(job_name, s3_uri):
                         logger.warning(f"跳过CSV行号 {original_index}：转录任务启动失败")
+                        error_count += 1
                         continue
                     
                     # 等待转录完成
                     job_result = self.wait_for_transcription_completion(job_name)
                     if not job_result:
                         logger.warning(f"跳过CSV行号 {original_index}：转录任务失败")
+                        error_count += 1
                         continue
                     
                     # 下载转录结果
@@ -706,6 +725,7 @@ class ImprovedAudioTranscriber:
                     transcript_data = self.download_transcript(transcript_uri)
                     if not transcript_data:
                         logger.warning(f"跳过CSV行号 {original_index}：转录结果下载失败")
+                        error_count += 1
                         continue
                     
                     # 保存转录结果（使用改进的文件名）
@@ -714,11 +734,17 @@ class ImprovedAudioTranscriber:
                     success_count += 1
                     logger.info(f"CSV行号 {original_index} 处理完成，输出文件: {json_filename}, {txt_filename}")
                     
+                    # 每处理10个文件输出一次进度
+                    if success_count % 10 == 0:
+                        logger.info(f"进度报告: 成功 {success_count}, 跳过 {skip_count}, 失败 {error_count}")
+                    
                 except Exception as e:
                     logger.error(f"处理CSV行号 {original_index} 时出错: {str(e)}")
+                    error_count += 1
                     continue
             
-            logger.info(f"所有文件处理完成，成功处理 {success_count} 个文件")
+            logger.info(f"所有文件处理完成")
+            logger.info(f"最终统计: 成功 {success_count}, 跳过 {skip_count}, 失败 {error_count}")
             logger.info(f"文件映射信息已保存到: {self.mapping_file}")
             
         except Exception as e:
@@ -776,7 +802,8 @@ def main():
     S3_BUCKET = os.getenv('S3_BUCKET')
     S3_FOLDER_PREFIX = os.getenv('S3_FOLDER_PREFIX', '')
     AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
-    LIMIT = int(os.getenv('LIMIT', '5')) if os.getenv('LIMIT') else None
+    LIMIT = int(os.getenv('LIMIT', '0')) if os.getenv('LIMIT') else None
+    START_FROM = int(os.getenv('START_FROM', '0')) if os.getenv('START_FROM') else 0
     
     # 验证必需的配置
     if not S3_BUCKET:
