@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-音频文件下载和转录脚本
-从CSV文件中读取MP3 URL，下载音频文件，并使用AWS Transcribe进行语音转文字
+改进的音频文件下载和转录脚本
+确保输出文件名能够与call.csv中的记录建立清晰的对应关系
 """
 
 import pandas as pd
@@ -22,7 +22,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class AudioTranscriber:
+class ImprovedAudioTranscriber:
     def __init__(self, aws_region='us-east-1'):
         """
         初始化转录器
@@ -39,6 +39,90 @@ class AudioTranscriber:
         self.transcripts_dir = Path('transcripts')
         self.audio_dir.mkdir(exist_ok=True)
         self.transcripts_dir.mkdir(exist_ok=True)
+        
+        # 创建映射文件记录处理结果
+        self.mapping_file = self.transcripts_dir / 'file_mapping.json'
+        self.load_mapping()
+    
+    def load_mapping(self):
+        """加载现有的文件映射"""
+        if self.mapping_file.exists():
+            try:
+                with open(self.mapping_file, 'r', encoding='utf-8') as f:
+                    self.file_mapping = json.load(f)
+            except Exception as e:
+                logger.warning(f"加载映射文件失败: {e}")
+                self.file_mapping = {}
+        else:
+            self.file_mapping = {}
+    
+    def save_mapping(self):
+        """保存文件映射"""
+        try:
+            with open(self.mapping_file, 'w', encoding='utf-8') as f:
+                json.dump(self.file_mapping, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存映射文件失败: {e}")
+    
+    def generate_output_filename(self, row_data, csv_row_index):
+        """
+        生成输出文件名，确保与CSV记录的对应关系清晰
+        
+        Args:
+            row_data: CSV行数据
+            csv_row_index: CSV中的行索引
+            
+        Returns:
+            tuple: (json文件名, txt文件名, 映射信息)
+        """
+        # 尝试获取业务ID（催收外呼id）
+        call_id = None
+        customer_id = None
+        
+        # 检查可能的ID列名
+        id_columns = ['催收外呼id', 'call_id', 'id', 'ID']
+        customer_columns = ['客户号', 'customer_id', 'customer_no']
+        
+        for col in id_columns:
+            if col in row_data and pd.notna(row_data[col]):
+                call_id = str(int(float(row_data[col]))) if isinstance(row_data[col], (int, float)) else str(row_data[col])
+                break
+        
+        for col in customer_columns:
+            if col in row_data and pd.notna(row_data[col]):
+                customer_id = str(int(float(row_data[col]))) if isinstance(row_data[col], (int, float)) else str(row_data[col])
+                break
+        
+        # 生成文件名
+        if call_id:
+            # 使用业务ID作为主要标识
+            base_name = f"transcript_call_{call_id}_row_{csv_row_index}"
+        else:
+            # 如果没有业务ID，使用行号
+            base_name = f"transcript_row_{csv_row_index}"
+        
+        json_filename = f"{base_name}.json"
+        txt_filename = f"{base_name}.txt"
+        
+        # 创建映射信息
+        mapping_info = {
+            'csv_row_index': csv_row_index,
+            'call_id': call_id,
+            'customer_id': customer_id,
+            'json_file': json_filename,
+            'txt_file': txt_filename,
+            'audio_url': row_data.get('通话录音', ''),
+            'processed_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'other_fields': {
+                '渠道': row_data.get('渠道', ''),
+                '外呼时间': row_data.get('外呼时间', ''),
+                '联系结果': row_data.get('联系结果', ''),
+                'collection_result': row_data.get('collection_result', ''),
+                'call_seconds': row_data.get('call_seconds', '')
+            }
+        }
+        
+        return json_filename, txt_filename, mapping_info
     
     def get_cached_filename(self, url):
         """
@@ -240,13 +324,15 @@ class AudioTranscriber:
             logger.error(f"下载转录结果失败: {str(e)}")
             return None
     
-    def save_transcript(self, transcript_data, output_file):
+    def save_transcript(self, transcript_data, json_output_file, txt_output_file, mapping_info):
         """
-        保存转录结果到文件
+        保存转录结果到文件，并更新映射信息
         
         Args:
             transcript_data: 转录结果数据
-            output_file: 输出文件路径
+            json_output_file: JSON输出文件路径
+            txt_output_file: TXT输出文件路径
+            mapping_info: 映射信息
         """
         try:
             # 提取转录文本
@@ -278,8 +364,9 @@ class AudioTranscriber:
             # 创建带标签的转录文本
             labeled_transcript = self.create_labeled_transcript(transcript_data)
             
-            # 保存结果
+            # 保存JSON结果（包含映射信息）
             result = {
+                'mapping_info': mapping_info,  # 添加映射信息到JSON文件中
                 'transcript': transcript_text,
                 'labeled_transcript': labeled_transcript,
                 'speaker_segments': speaker_segments,
@@ -287,14 +374,24 @@ class AudioTranscriber:
                 'full_result': transcript_data
             }
             
-            with open(output_file, 'w', encoding='utf-8') as f:
+            with open(json_output_file, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"转录结果已保存: {output_file}")
+            logger.info(f"转录结果已保存: {json_output_file}")
             
-            # 同时保存格式化的文本版本
-            text_file = output_file.with_suffix('.txt')
-            with open(text_file, 'w', encoding='utf-8') as f:
+            # 保存格式化的文本版本
+            with open(txt_output_file, 'w', encoding='utf-8') as f:
+                # 添加文件头信息，说明对应关系
+                f.write("=== 文件对应关系 ===\n")
+                f.write(f"CSV行号: {mapping_info['csv_row_index']}\n")
+                if mapping_info['call_id']:
+                    f.write(f"催收外呼ID: {mapping_info['call_id']}\n")
+                if mapping_info['customer_id']:
+                    f.write(f"客户号: {mapping_info['customer_id']}\n")
+                f.write(f"处理时间: {mapping_info['processed_time']}\n")
+                f.write(f"音频URL: {mapping_info['audio_url']}\n")
+                f.write("\n")
+                
                 f.write("=== 带标签的转录文本（推荐用于分析） ===\n")
                 f.write(labeled_transcript + "\n\n")
                 
@@ -326,7 +423,12 @@ class AudioTranscriber:
                         speaker_name = self.get_speaker_name(segment['speaker'])
                         f.write(f"{speaker_name} {time_str}: {segment_text.strip()}\n")
             
-            logger.info(f"格式化文本已保存: {text_file}")
+            logger.info(f"格式化文本已保存: {txt_output_file}")
+            
+            # 更新映射记录
+            file_key = mapping_info['json_file']
+            self.file_mapping[file_key] = mapping_info
+            self.save_mapping()
             
         except Exception as e:
             logger.error(f"保存转录结果失败: {str(e)}")
@@ -358,24 +460,6 @@ class AudioTranscriber:
             'spk_9': '[说话人10]'
         }
         return speaker_mapping.get(speaker_label, f'[{speaker_label}]')
-    
-    def get_channel_name(self, channel_label):
-        """
-        将声道标签转换为更友好的名称
-        
-        Args:
-            channel_label: AWS返回的声道标签 (如 ch_0, ch_1)
-            
-        Returns:
-            str: 友好的声道名称
-        """
-        channel_mapping = {
-            'ch_0': '[声道1-客服]',
-            'ch_1': '[声道2-客户]',
-            'ch_2': '[声道3]',
-            'ch_3': '[声道4]'
-        }
-        return channel_mapping.get(channel_label, f'[{channel_label}]')
     
     def create_labeled_transcript(self, transcript_data):
         """
@@ -524,64 +608,25 @@ class AudioTranscriber:
                     return "[转录处理失败: 无法获取文本]"
             except:
                 return "[转录处理完全失败]"
-    def clean_cache(self, max_age_days=7):
+    
+    def get_channel_name(self, channel_label):
         """
-        清理过期的缓存文件
+        将声道标签转换为更友好的名称
         
         Args:
-            max_age_days: 缓存文件的最大保留天数
-        """
-        try:
-            import time
-            current_time = time.time()
-            max_age_seconds = max_age_days * 24 * 3600
+            channel_label: AWS返回的声道标签 (如 ch_0, ch_1)
             
-            cleaned_count = 0
-            total_size = 0
-            
-            for file_path in self.audio_dir.glob('*'):
-                if file_path.is_file():
-                    file_age = current_time - file_path.stat().st_mtime
-                    file_size = file_path.stat().st_size
-                    
-                    if file_age > max_age_seconds:
-                        total_size += file_size
-                        file_path.unlink()
-                        cleaned_count += 1
-                        logger.info(f"删除过期缓存文件: {file_path}")
-            
-            if cleaned_count > 0:
-                logger.info(f"清理完成: 删除了 {cleaned_count} 个文件，释放空间 {total_size / 1024 / 1024:.2f} MB")
-            else:
-                logger.info("没有需要清理的过期缓存文件")
-                
-        except Exception as e:
-            logger.error(f"清理缓存失败: {str(e)}")
-    
-    def get_cache_info(self):
-        """
-        获取缓存信息
-        
         Returns:
-            dict: 缓存统计信息
+            str: 友好的声道名称
         """
-        try:
-            file_count = 0
-            total_size = 0
-            
-            for file_path in self.audio_dir.glob('*'):
-                if file_path.is_file():
-                    file_count += 1
-                    total_size += file_path.stat().st_size
-            
-            return {
-                'file_count': file_count,
-                'total_size_mb': total_size / 1024 / 1024,
-                'cache_dir': str(self.audio_dir)
-            }
-        except Exception as e:
-            logger.error(f"获取缓存信息失败: {str(e)}")
-            return None
+        channel_mapping = {
+            'ch_0': '[声道1-客服]',
+            'ch_1': '[声道2-客户]',
+            'ch_2': '[声道3]',
+            'ch_3': '[声道4]'
+        }
+        return channel_mapping.get(channel_label, f'[{channel_label}]')
+    
     def process_csv_file(self, csv_file, s3_bucket, s3_folder_prefix='', audio_column='通话录音', limit=None):
         """
         处理CSV文件中的音频URL
@@ -611,10 +656,22 @@ class AudioTranscriber:
             logger.info(f"找到 {len(valid_urls)} 个有效的音频URL")
             
             # 处理每个音频文件
+            success_count = 0
             for idx, (original_index, row) in enumerate(valid_urls.iterrows()):
                 try:
                     audio_url = row[audio_column]
                     logger.info(f"处理第 {idx + 1} 个文件 (CSV行号: {original_index}): {audio_url}")
+                    
+                    # 生成输出文件名和映射信息
+                    json_filename, txt_filename, mapping_info = self.generate_output_filename(row, original_index)
+                    
+                    # 检查是否已经处理过
+                    json_output_file = self.transcripts_dir / json_filename
+                    txt_output_file = self.transcripts_dir / txt_filename
+                    
+                    if json_output_file.exists() and txt_output_file.exists():
+                        logger.info(f"文件已存在，跳过处理: {json_filename}")
+                        continue
                     
                     # 下载音频文件（使用缓存）
                     local_file_path = self.download_audio_file(audio_url)
@@ -651,23 +708,63 @@ class AudioTranscriber:
                         logger.warning(f"跳过CSV行号 {original_index}：转录结果下载失败")
                         continue
                     
-                    # 保存转录结果（使用原始CSV行号作为文件名）
-                    output_file = self.transcripts_dir / f"transcript_{original_index}.json"
-                    self.save_transcript(transcript_data, output_file)
+                    # 保存转录结果（使用改进的文件名）
+                    self.save_transcript(transcript_data, json_output_file, txt_output_file, mapping_info)
                     
-                    # 清理本地音频文件（可选）
-                    # os.remove(local_file_path)
-                    
-                    logger.info(f"CSV行号 {original_index} 处理完成")
+                    success_count += 1
+                    logger.info(f"CSV行号 {original_index} 处理完成，输出文件: {json_filename}, {txt_filename}")
                     
                 except Exception as e:
                     logger.error(f"处理CSV行号 {original_index} 时出错: {str(e)}")
                     continue
             
-            logger.info("所有文件处理完成")
+            logger.info(f"所有文件处理完成，成功处理 {success_count} 个文件")
+            logger.info(f"文件映射信息已保存到: {self.mapping_file}")
             
         except Exception as e:
             logger.error(f"处理CSV文件失败: {str(e)}")
+    
+    def generate_mapping_report(self):
+        """
+        生成映射关系报告
+        """
+        try:
+            report_file = self.transcripts_dir / 'mapping_report.txt'
+            
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write("=== 文件映射关系报告 ===\n")
+                f.write(f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"总计处理文件数: {len(self.file_mapping)}\n\n")
+                
+                f.write("格式说明:\n")
+                f.write("- CSV行号: 在call.csv文件中的行号（从0开始）\n")
+                f.write("- 催收外呼ID: 业务系统中的唯一标识\n")
+                f.write("- 客户号: 客户在系统中的编号\n")
+                f.write("- JSON文件: 包含完整转录数据的JSON文件\n")
+                f.write("- TXT文件: 格式化的文本文件，便于阅读\n\n")
+                
+                f.write("=" * 80 + "\n")
+                
+                # 按CSV行号排序
+                sorted_mappings = sorted(self.file_mapping.items(), 
+                                       key=lambda x: x[1]['csv_row_index'])
+                
+                for json_file, mapping in sorted_mappings:
+                    f.write(f"CSV行号: {mapping['csv_row_index']}\n")
+                    if mapping['call_id']:
+                        f.write(f"催收外呼ID: {mapping['call_id']}\n")
+                    if mapping['customer_id']:
+                        f.write(f"客户号: {mapping['customer_id']}\n")
+                    f.write(f"JSON文件: {mapping['json_file']}\n")
+                    f.write(f"TXT文件: {mapping['txt_file']}\n")
+                    f.write(f"处理时间: {mapping['processed_time']}\n")
+                    f.write(f"音频URL: {mapping['audio_url'][:80]}...\n")
+                    f.write("-" * 40 + "\n")
+            
+            logger.info(f"映射关系报告已生成: {report_file}")
+            
+        except Exception as e:
+            logger.error(f"生成映射报告失败: {str(e)}")
 
 
 def main():
@@ -707,16 +804,8 @@ def main():
         logger.error(f"CSV文件不存在: {CSV_FILE}")
         return
     
-    # 创建转录器实例
-    transcriber = AudioTranscriber(aws_region=AWS_REGION)
-    
-    # 显示缓存信息
-    cache_info = transcriber.get_cache_info()
-    if cache_info:
-        logger.info(f"缓存信息: {cache_info['file_count']} 个文件, {cache_info['total_size_mb']:.2f} MB")
-    
-    # 可选：清理过期缓存（超过7天的文件）
-    # transcriber.clean_cache(max_age_days=7)
+    # 创建改进的转录器实例
+    transcriber = ImprovedAudioTranscriber(aws_region=AWS_REGION)
     
     # 处理CSV文件
     transcriber.process_csv_file(
@@ -725,6 +814,9 @@ def main():
         s3_folder_prefix=S3_FOLDER_PREFIX,
         limit=LIMIT
     )
+    
+    # 生成映射关系报告
+    transcriber.generate_mapping_report()
 
 
 if __name__ == "__main__":
